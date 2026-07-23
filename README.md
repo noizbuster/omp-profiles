@@ -1,8 +1,39 @@
-# OMP configuration-isolated profiles
+# Oh My Pi Profile Collection
+
+## Quick start
+
+Clone the repository into Oh My Pi's standard profile directory:
+
+```sh
+mkdir -p ~/.omp
+git clone https://github.com/noizbuster/omp-profiles.git ~/.omp/profiles
+cd ~/.omp/profiles
+```
+
+Add permanent shortcuts for every profile. This selects `~/.zshrc` for Zsh and `~/.bashrc` for Bash; the final line makes them available immediately and preserves them for new terminals.
+
+```sh
+rc_file="${ZDOTDIR:-$HOME}/.zshrc"
+[ "${SHELL##*/}" = "bash" ] && rc_file="$HOME/.bashrc"
+
+cat >> "$rc_file" <<'EOF'
+# Oh My Pi profile shortcuts
+alias ompf='omp --profile fast'
+alias ompg='omp --profile glm'
+alias ompb='omp --profile budget'
+alias omps='omp --profile spark'
+alias ompr='omp --profile grok'
+alias omph='omp --profile hybrid'
+EOF
+
+. "$rc_file"
+```
+
+Start a profile with its shortcut, for example `ompf` for the fast profile or `omph` for the hybrid profile. See the table below for every shortcut.
 
 Each directory in this repository is an `omp --profile` profile. Its `agent/config.yml` is a normal, writable, profile-specific file; all other discovered runtime state is shared from `~/.omp/agent`.
 
-Clone or place this repository at `~/.omp/profiles`. The managed links use paths relative to `<profile>/agent` (for example, `../../../agent/agent.db`), so they remain valid on another machine when the repository is checked out at that standard location.
+Managed links use paths relative to `<profile>/agent` (for example, `../../../agent/agent.db`), so they remain valid on another machine when the repository is checked out at `~/.omp/profiles`.
 
 ## Profiles
 
@@ -17,7 +48,7 @@ Clone or place this repository at `~/.omp/profiles`. The managed links use paths
 
 `ompg` was requested for both `glm` and `grok`; a shell cannot define two aliases with the same name. It is assigned to `glm`, and the Grok alias is `ompr`.
 
-## Use a profile
+## Run a profile without aliases
 
 ```sh
 omp --profile fast
@@ -26,15 +57,6 @@ omp --profile budget
 omp --profile spark
 omp --profile grok
 omp --profile hybrid
-```
-
-```sh
-alias ompf='omp --profile fast'
-alias ompg='omp --profile glm'
-alias ompb='omp --profile budget'
-alias omps='omp --profile spark'
-alias ompr='omp --profile grok'
-alias omph='omp --profile hybrid'
 ```
 
 ## Shared state and private configuration
