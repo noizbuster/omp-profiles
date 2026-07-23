@@ -1,0 +1,7 @@
+# One OMP profile per line. Used by omp-profile-share and provisioning scripts.
+fast
+glm
+budget
+spark
+grok
+hybrid

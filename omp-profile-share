@@ -1,0 +1,421 @@
+#!/usr/bin/env bash
+# Share OMP runtime state while keeping each profile configuration independent.
+set -Eeuo pipefail
+IFS=$'\n\t'
+
+OMP_ROOT="${OMP_ROOT:-$HOME/.omp}"
+DEFAULT_AGENT="${OMP_DEFAULT_AGENT:-$OMP_ROOT/agent}"
+PROFILE_ROOT="${OMP_PROFILE_ROOT:-$OMP_ROOT/profiles}"
+BACKUP_ROOT="${OMP_PROFILE_SHARE_BACKUP_ROOT:-$OMP_ROOT/profile-share-backups}"
+DEFAULT_PRIVATE_ITEMS='config.yml:config.yaml:config.json:config.jsonc:settings.json:settings.json.bak'
+PRIVATE_ITEMS="${OMP_PROFILE_PRIVATE_ITEMS:-$DEFAULT_PRIVATE_ITEMS}"
+ROOT_PRIVATE_ITEMS='agent:profiles:profile-share-backups'
+EXTRA_ROOT_PRIVATE_ITEMS="${OMP_PROFILE_ROOT_PRIVATE_ITEMS:-}"
+
+usage() {
+  cat <<'EOF'
+Usage: omp-profile-share <setup|sync|status|detach> <profile> [profile...]
+
+Shares every non-private top-level item from the default OMP agent directory
+with named profiles. Profile config files remain ordinary writable files.
+
+Environment:
+  OMP_ROOT, OMP_DEFAULT_AGENT, OMP_PROFILE_ROOT,
+  OMP_PROFILE_SHARE_BACKUP_ROOT, OMP_PROFILE_PRIVATE_ITEMS
+  OMP_PROFILE_SHARE_ALLOW_RUNNING=1  bypass the active-OMP safety guard
+EOF
+}
+
+fail() {
+  printf 'omp-profile-share: %s\n' "$*" >&2
+  exit 1
+}
+
+is_private() {
+  local name=$1 item
+  IFS=: read -r -a items <<<"$PRIVATE_ITEMS"
+  for item in "${items[@]}"; do
+    [[ $name == "$item" ]] && return 0
+  done
+  return 1
+}
+
+is_root_private() {
+  local name=$1 item list
+  local -a items
+  for list in "$ROOT_PRIVATE_ITEMS" "$EXTRA_ROOT_PRIVATE_ITEMS"; do
+    IFS=: read -r -a items <<<"$list"
+    for item in "${items[@]}"; do
+      [[ $name == "$item" ]] && return 0
+    done
+  done
+  return 1
+}
+
+is_sqlite_sidecar() {
+  case $1 in
+    *-wal|*-shm|*-journal|*.db-wal|*.db-shm|*.db-journal) return 0 ;;
+    *) return 1 ;;
+  esac
+}
+
+omp_is_running() {
+  pgrep -u "$(id -u)" -af '(^|/)omp([[:space:]]|$)|[[:space:]]omp([[:space:]]|$)' >/dev/null
+}
+
+require_stopped_omp() {
+  [[ ${OMP_PROFILE_SHARE_ALLOW_RUNNING:-} == 1 ]] && return 0
+  omp_is_running && fail 'OMP is running; stop it before changing profile state (or explicitly set OMP_PROFILE_SHARE_ALLOW_RUNNING=1).'
+}
+
+require_stopped_omp_strict() {
+  omp_is_running && fail 'OMP is running; stop it before detaching a profile.'
+}
+
+validate_profile_name() {
+  [[ $1 =~ ^[A-Za-z0-9._-]+$ && $1 != . && $1 != .. ]] || fail "invalid profile name: $1"
+}
+
+profile_agent_dir() {
+  printf '%s/%s/agent\n' "$PROFILE_ROOT" "$1"
+}
+
+profile_dir() {
+  printf '%s/%s\n' "$PROFILE_ROOT" "$1"
+}
+
+relative_target() {
+  realpath --relative-to="$1" "$2"
+}
+
+backup_path() {
+  local profile=$1 item=$2 stamp=$3
+  printf '%s/%s/%s/%s\n' "$BACKUP_ROOT" "$profile" "$stamp" "$item"
+}
+
+backup_item() {
+  local profile=$1 item=$2 source=$3 stamp=$4 target
+  target=$(backup_path "$profile" "$item" "$stamp")
+  mkdir -p "$(dirname "$target")"
+  mv "$source" "$target"
+  printf 'BACKUP %s -> %s\n' "$source" "$target"
+}
+
+ensure_private_config() {
+  local profile=$1 agent_dir=$2 config="$agent_dir/config.yml"
+  mkdir -p "$agent_dir"
+
+  if [[ -L $config ]]; then
+    fail "refusing symlinked private config: $config"
+  fi
+
+  if [[ ! -e $config ]]; then
+    if [[ -f $DEFAULT_AGENT/config.yml ]]; then
+      cp -a "$DEFAULT_AGENT/config.yml" "$config"
+    else
+      printf '{}\n' >"$config"
+    fi
+  fi
+}
+
+link_item() {
+  local profile=$1 agent_dir=$2 source=$3 stamp=$4 name destination target
+  name=$(basename "$source")
+  destination="$agent_dir/$name"
+  target=$(relative_target "$agent_dir" "$source")
+
+  if [[ -L $destination ]]; then
+    if [[ $(readlink -f "$destination") == $(readlink -f "$source") ]]; then
+      return
+    fi
+    backup_item "$profile" "$name" "$destination" "$stamp"
+  elif [[ -e $destination ]]; then
+    if [[ -d $destination && -d $source ]]; then
+      # Preserve profile-only files without overwriting the default shared state.
+      cp -a --update=none "$destination"/. "$source"/
+    fi
+    backup_item "$profile" "$name" "$destination" "$stamp"
+  fi
+
+  ln -s "$target" "$destination"
+  printf 'SHARED %s -> %s\n' "$destination" "$target"
+}
+
+link_root_item() {
+  local profile=$1 directory=$2 source=$3 stamp=$4 name destination target
+  name=$(basename "$source")
+  destination="$directory/$name"
+  target=$(relative_target "$directory" "$source")
+
+  if [[ -L $destination ]]; then
+    if [[ $(readlink "$destination") == "$target" && $(readlink -f "$destination") == $(readlink -f "$source") ]]; then
+      return
+    fi
+    backup_item "$profile" "root-$name" "$destination" "$stamp"
+  elif [[ -e $destination ]]; then
+    if [[ -d $destination && -d $source ]]; then
+      cp -a --update=none "$destination"/. "$source"/
+    fi
+    backup_item "$profile" "root-$name" "$destination" "$stamp"
+  fi
+
+  ln -s "$target" "$destination"
+  printf 'SHARED_ROOT %s -> %s\n' "$destination" "$target"
+}
+
+promote_profile_root_only_items() {
+  local profile=$1 directory=$2 stamp=$3 destination source name target
+  shopt -s dotglob nullglob
+  for destination in "$directory"/*; do
+    name=$(basename "$destination")
+    is_root_private "$name" && continue
+    source="$OMP_ROOT/$name"
+    [[ -e $source || -L $source || -L $destination ]] && continue
+
+    target=$(backup_path "$profile" "root-$name" "$stamp")
+    mkdir -p "$(dirname "$target")"
+    cp -a "$destination" "$target"
+    mv "$destination" "$source"
+    printf 'PROMOTED_ROOT %s -> %s (backup: %s)\n' "$destination" "$source" "$target"
+  done
+  shopt -u dotglob nullglob
+}
+
+sync_profile_root() {
+  local profile=$1 directory=$2 stamp=$3 source name
+  promote_profile_root_only_items "$profile" "$directory" "$stamp"
+
+  shopt -s dotglob nullglob
+  for source in "$OMP_ROOT"/*; do
+    name=$(basename "$source")
+    is_root_private "$name" && continue
+    link_root_item "$profile" "$directory" "$source" "$stamp"
+  done
+  shopt -u dotglob nullglob
+}
+
+promote_profile_only_items() {
+  local profile=$1 agent_dir=$2 stamp=$3 destination source name target
+  shopt -s dotglob nullglob
+  for destination in "$agent_dir"/*; do
+    name=$(basename "$destination")
+    is_private "$name" && continue
+    is_sqlite_sidecar "$name" && continue
+    source="$DEFAULT_AGENT/$name"
+    [[ -e $source || -L $source || -L $destination ]] && continue
+
+    target=$(backup_path "$profile" "$name" "$stamp")
+    mkdir -p "$(dirname "$target")"
+    cp -a "$destination" "$target"
+    mv "$destination" "$source"
+    printf 'PROMOTED %s -> %s (backup: %s)\n' "$destination" "$source" "$target"
+  done
+  shopt -u dotglob nullglob
+}
+
+sync_profile() {
+  local profile=$1 directory agent_dir source stamp name
+  validate_profile_name "$profile"
+  directory=$(profile_dir "$profile")
+  agent_dir=$(profile_agent_dir "$profile")
+  mkdir -p "$directory"
+  ensure_private_config "$profile" "$agent_dir"
+  stamp=$(date +%Y%m%d-%H%M%S)
+
+  sync_profile_root "$profile" "$directory" "$stamp"
+
+  # Sidecars are owned by SQLite beside the resolved database and must never
+  # remain as profile-local files or be replaced with links.
+  shopt -s nullglob
+  for source in "$agent_dir"/*; do
+    name=$(basename "$source")
+    is_sqlite_sidecar "$name" || continue
+    backup_item "$profile" "$name" "$source" "$stamp"
+  done
+  shopt -u nullglob
+  promote_profile_only_items "$profile" "$agent_dir" "$stamp"
+
+  shopt -s dotglob nullglob
+  for source in "$DEFAULT_AGENT"/*; do
+    name=$(basename "$source")
+    is_private "$name" && continue
+    is_sqlite_sidecar "$name" && continue
+    link_item "$profile" "$agent_dir" "$source" "$stamp"
+  done
+  shopt -u dotglob nullglob
+}
+
+status_profile_root() {
+  local profile=$1 directory=$2 source name destination resolved_source resolved_destination target link_text
+  shopt -s dotglob nullglob
+  for source in "$OMP_ROOT"/*; do
+    name=$(basename "$source")
+    is_root_private "$name" && continue
+    destination="$directory/$name"
+    target=$(relative_target "$directory" "$source")
+    if [[ -L $destination ]]; then
+      link_text=$(readlink "$destination")
+      resolved_source=$(readlink -f "$source")
+      resolved_destination=$(readlink -f "$destination")
+      if [[ $link_text == "$target" && $resolved_destination == "$resolved_source" ]]; then
+        printf 'SHARED_ROOT %s/%s -> %s\n' "$profile" "$name" "$link_text"
+      else
+        printf 'ROOT_LINK? %s/%s -> %s\n' "$profile" "$name" "$link_text"
+      fi
+    elif [[ -e $destination ]]; then
+      printf 'ROOT_LOCAL %s/%s\n' "$profile" "$name"
+    else
+      printf 'ROOT_MISSING %s/%s\n' "$profile" "$name"
+    fi
+  done
+
+  for destination in "$directory"/*; do
+    name=$(basename "$destination")
+    is_root_private "$name" && continue
+    source="$OMP_ROOT/$name"
+    [[ -e $source || -L $source ]] && continue
+    if [[ -L $destination ]]; then
+      printf 'ROOT_LINK? %s/%s -> %s\n' "$profile" "$name" "$(readlink "$destination")"
+    else
+      printf 'ROOT_LOCAL %s/%s\n' "$profile" "$name"
+    fi
+  done
+  shopt -u dotglob nullglob
+}
+
+status_profile() {
+  local profile=$1 directory agent_dir source name destination resolved_source resolved_destination target link_text
+  validate_profile_name "$profile"
+  directory=$(profile_dir "$profile")
+  agent_dir=$(profile_agent_dir "$profile")
+  [[ -d $agent_dir ]] || fail "profile does not exist: $profile"
+  status_profile_root "$profile" "$directory"
+
+  for name in config.yml config.yaml config.json config.jsonc settings.json settings.json.bak; do
+    destination="$agent_dir/$name"
+    [[ -e $destination || -L $destination ]] || continue
+    if [[ -L $destination ]]; then
+      printf 'LINK? %s/%s\n' "$profile" "$name"
+    else
+      printf 'PRIVATE %s/%s\n' "$profile" "$name"
+    fi
+  done
+
+  shopt -s dotglob nullglob
+  for source in "$DEFAULT_AGENT"/*; do
+    name=$(basename "$source")
+    is_private "$name" && continue
+    is_sqlite_sidecar "$name" && continue
+    destination="$agent_dir/$name"
+    target=$(relative_target "$agent_dir" "$source")
+    if [[ -L $destination ]]; then
+      link_text=$(readlink "$destination")
+      resolved_source=$(readlink -f "$source")
+      resolved_destination=$(readlink -f "$destination")
+      if [[ $link_text == "$target" && $resolved_destination == "$resolved_source" ]]; then
+        printf 'SHARED %s/%s -> %s\n' "$profile" "$name" "$link_text"
+      else
+        printf 'LINK? %s/%s -> %s\n' "$profile" "$name" "$link_text"
+      fi
+    elif [[ -e $destination ]]; then
+      printf 'LOCAL %s/%s\n' "$profile" "$name"
+    else
+      printf 'MISSING %s/%s\n' "$profile" "$name"
+    fi
+  done
+
+  for destination in "$agent_dir"/*; do
+    name=$(basename "$destination")
+    is_sqlite_sidecar "$name" || continue
+    printf 'SIDECAR %s/%s\n' "$profile" "$name"
+  done
+
+  # Surface profile-only state that has no default-agent counterpart.
+  for destination in "$agent_dir"/*; do
+    name=$(basename "$destination")
+    is_private "$name" && continue
+    is_sqlite_sidecar "$name" && continue
+    source="$DEFAULT_AGENT/$name"
+    [[ -e $source || -L $source ]] && continue
+    if [[ -L $destination ]]; then
+      printf 'LINK? %s/%s -> %s\n' "$profile" "$name" "$(readlink "$destination")"
+    else
+      printf 'LOCAL %s/%s\n' "$profile" "$name"
+    fi
+  done
+  shopt -u dotglob nullglob
+}
+
+detach_link() {
+  local destination=$1 source temporary link_backup suffix
+  source=$(readlink -f "$destination")
+  temporary="${destination}.detach.$$"
+  link_backup="${destination}.link-backup.$$"
+  [[ ! -e $temporary && ! -L $temporary && ! -e $link_backup && ! -L $link_backup ]] ||
+    fail "refusing to overwrite rollback staging path for $destination"
+
+  # Copy before replacing the managed symlink; include SQLite sidecars.
+  cp -a "$source" "$temporary"
+  if [[ $source == *.db ]]; then
+    for suffix in -wal -shm -journal; do
+      [[ -e $source$suffix ]] && cp -a "$source$suffix" "$temporary$suffix"
+    done
+  fi
+
+  mv "$destination" "$link_backup"
+  if ! mv "$temporary" "$destination"; then
+    mv "$link_backup" "$destination" || true
+    fail "failed to replace managed link: $destination"
+  fi
+  if [[ $source == *.db ]]; then
+    for suffix in -wal -shm -journal; do
+      [[ -e $temporary$suffix ]] && mv "$temporary$suffix" "$destination$suffix"
+    done
+  fi
+  rm "$link_backup"
+  printf 'DETACHED %s\n' "$destination"
+}
+
+detach_profile() {
+  local profile=$1 directory agent_dir destination name
+  validate_profile_name "$profile"
+  directory=$(profile_dir "$profile")
+  agent_dir=$(profile_agent_dir "$profile")
+  [[ -d $agent_dir ]] || fail "profile does not exist: $profile"
+
+  shopt -s dotglob nullglob
+  for destination in "$agent_dir"/*; do
+    [[ -L $destination ]] || continue
+    detach_link "$destination"
+  done
+  for destination in "$directory"/*; do
+    name=$(basename "$destination")
+    is_root_private "$name" && continue
+    [[ -L $destination ]] || continue
+    detach_link "$destination"
+  done
+  shopt -u dotglob nullglob
+}
+
+[[ $# -ge 2 ]] || { usage >&2; exit 2; }
+command=$1
+shift
+
+[[ -d $DEFAULT_AGENT ]] || fail "default agent directory does not exist: $DEFAULT_AGENT"
+case $command in
+  setup|sync)
+    require_stopped_omp
+    for profile in "$@"; do sync_profile "$profile"; done
+    ;;
+  status)
+    for profile in "$@"; do status_profile "$profile"; done
+    ;;
+  detach)
+    require_stopped_omp_strict
+    for profile in "$@"; do detach_profile "$profile"; done
+    ;;
+  *)
+    usage >&2
+    exit 2
+    ;;
+esac

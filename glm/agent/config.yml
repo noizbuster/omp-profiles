@@ -1,0 +1,24 @@
+# GLM profile.
+setupVersion: 1
+modelRoles:
+  slow: zai/glm-5.2:max
+  plan: zai/glm-5.2:max
+  default: zai/glm-5.2:max
+  smol: zai/glm-5.2:max
+  vision: opencode-go/mimo-v2.5:high
+  advisor: zai/glm-5.2:max
+  designer: zai/glm-5.2:max
+  commit: zai/glm-5.2:high
+  tiny: zai/glm-5.2:high
+  task: zai/glm-5.2:max
+task:
+  disabledAgents:
+    []
+cycleOrder:
+  []
+retry:
+  fallbackChains:
+    vision:
+      - opencode-go/kimi-k2.6
+providers:
+  webSearch: auto

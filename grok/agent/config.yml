@@ -1,0 +1,22 @@
+setupVersion: 1
+modelRoles: 
+  slow: xai-oauth/grok-4.5:high
+  plan: xai-oauth/grok-4.5:high
+  default: xai-oauth/grok-4.5:high
+  smol: xai-oauth/grok-4.5:medium
+  vision: xai-oauth/grok-4.5:medium
+  advisor: xai-oauth/grok-4.5:high
+  designer: xai-oauth/grok-4.5:high
+  commit: xai-oauth/grok-4.5:low
+  tiny: xai-oauth/grok-4.5:low
+  task: xai-oauth/grok-4.5:high
+task: 
+  disabledAgents: 
+    []
+cycleOrder: 
+  []
+retry: 
+  fallbackChains: 
+    {}
+providers: 
+  webSearch: auto
