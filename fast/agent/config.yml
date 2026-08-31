@@ -1,33 +1,15 @@
-setupVersion: 1
-modelRoles: 
-  plan: openai-codex/gpt-5.6-sol:xhigh
-  default: xai-oauth/grok-4.5:high
-  vision: xai-oauth/grok-4.5:high
-  advisor: openai-codex/gpt-5.6-terra:xhigh
-  task: xai-oauth/grok-4.5:high
-  tiny: xai-oauth/grok-4.5:low
-  commit: xai-oauth/grok-4.5:low
-  designer: xai-oauth/grok-4.5:high
-  smol: xai-oauth/grok-4.5:high
-  slow: openai-codex/gpt-5.6-terra:xhigh
-task: 
-  disabledAgents: 
-    []
-cycleOrder: 
-  []
-retry: 
-  fallbackChains: 
-    task: 
-      - openai-codex/gpt-5.6-terra
-    commit: 
-      - openai-codex/gpt-5.6-luna
-    tiny: 
-      - openai-codex/gpt-5.6-luna
-    designer: 
-      - openai-codex/gpt-5.6-terra
-    vision: 
-      - openai-codex/gpt-5.6-terra
-    smol: 
-      - openai-codex/gpt-5.6-luna
-providers: 
-  webSearch: auto
+setupVersion: 2
+modelRoles:
+  plan: xai-oauth/grok-4.6:xhigh
+  default: xai-oauth/grok-4.6:xhigh
+  vision: xai-oauth/grok-4.6:xhigh
+  advisor: xai-oauth/grok-4.6:xhigh
+  task: xai-oauth/grok-4.6:xhigh
+  tiny: xai-oauth/grok-4.6:high
+  commit: xai-oauth/grok-4.6:high
+  designer: xai-oauth/grok-4.6:xhigh
+  smol: xai-oauth/grok-4.6:high
+  slow: xai-oauth/grok-4.6:xhigh
+extendedContext: false
+statusLine:
+  compactThinkingLevel: false

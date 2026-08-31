@@ -1,0 +1,21 @@
+setupVersion: 2
+modelRoles:
+  slow: openai-codex/gpt-5.6-sol:max
+  plan: openai-codex/gpt-5.6-sol:max
+  default: openai-codex/gpt-5.6-sol:xhigh
+  smol: opencode-go/gpt-5.6-luna:max
+  vision: openai-codex/gpt-5.6-terra:xhigh
+  advisor: openai-codex/gpt-5.6-terra:max
+  designer: openai-codex/gpt-5.6-terra:xhigh
+  commit: openai-codex/gpt-5.3-codex-spark:xhigh
+  tiny: openai-codex/gpt-5.3-codex-spark:xhigh
+  task: openai-codex/gpt-5.6-terra:xhigh
+retry:
+  fallbackChains:
+    commit:
+      - openai-codex/gpt-5.6-luna
+    tiny:
+      - openai-codex/gpt-5.6-luna
+extendedContext: true
+statusLine:
+  compactThinkingLevel: false

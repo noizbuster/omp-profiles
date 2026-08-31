@@ -1,5 +1,4 @@
-# GLM profile.
-setupVersion: 1
+setupVersion: 2
 modelRoles:
   slow: zai/glm-5.2:max
   plan: zai/glm-5.2:max
@@ -21,4 +20,9 @@ retry:
     vision:
       - opencode-go/kimi-k2.6
 providers:
-  webSearch: auto
+  {}
+composer:
+  shape: band
+extendedContext: false
+statusLine:
+  compactThinkingLevel: false
