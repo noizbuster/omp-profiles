@@ -5,11 +5,20 @@ modelRoles:
   vision: zai/glm-5.3-flash:max
   advisor: zai/glm-5.3:max
   designer: zai/glm-5.3:max
-  commit: zai/glm-5.3-flash:max
-  tiny: zai/glm-5.3-flash:max
+  commit: zai/glm-5.3-flashx
+  tiny: zai/glm-5.3-flashx
   task: zai/glm-5.3:max
   default: zai/glm-5.3:max
   slow: zai/glm-5.3:max
+  memory: zai/glm-5.3-flashx
 extendedContext: true
 statusLine:
   compactThinkingLevel: false
+retry:
+  fallbackChains:
+    memory:
+      - zai/glm-5.3-flash
+    tiny:
+      - zai/glm-5.3-flash
+    commit:
+      - zai/glm-5.3-flash

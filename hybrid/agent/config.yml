@@ -1,24 +1,22 @@
 setupVersion: 2
 modelRoles:
-  slow: openai-codex/gpt-5.6-sol:max
-  plan: openai-codex/gpt-5.6-sol:max
-  default: openai-codex/gpt-5.6-sol:xhigh
+  slow: openai-codex/gpt-6-astra:xhigh
+  plan: openai-codex/gpt-6-astra:xhigh
+  default: openai-codex/gpt-6-astra:high
   smol: zai/glm-5.3:max
-  vision: google-antigravity/gemini-3.7-flash:high
+  vision: openai-codex/gpt-5.6-sol:high
   advisor: zai/glm-5.3:max
-  designer: zai/glm-5.3:max
-  commit: google-antigravity/gemini-3.7-flash:high
-  tiny: google-antigravity/gemini-3.7-flash:high
+  designer: openai-codex/gpt-5.6-sol:max
   task: zai/glm-5.3:max
+  commit: opencode-go/deepseek-v4.1-flash:high
+  tiny: opencode-go/deepseek-v4.1-flash:high
+  memory: opencode-go/deepseek-v4.1-flash:high
 retry:
   fallbackChains:
-    vision:
-      - openai-codex/gpt-5.6-terra
-      - zai/glm-5.3-flash
-    commit:
-      - openai-codex/gpt-5.6-luna
-    tiny:
-      - openai-codex/gpt-5.6-luna
+    task:
+      - openai-codex/gpt-5.6-sol
+    designer:
+      - zai/glm-5.3
 extendedContext: true
 statusLine:
   compactThinkingLevel: false
