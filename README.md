@@ -10,6 +10,14 @@ git clone https://github.com/noizbuster/omp-profiles.git ~/.omp/profiles
 cd ~/.omp/profiles
 ```
 
+After cloning, one command provisions every profile in `omp-profiles.txt` using the default paths (`~/.omp/agent` and `~/.omp/profiles`). Stop OMP first:
+
+```sh
+~/.omp/profiles/omp-profile-share setup
+```
+
+This creates any missing profile directories and shares their runtime state from `~/.omp/agent`. On success, the script prints a profile summary and copyable aliases for the selected shell config.
+
 Add permanent shortcuts for every profile. This selects `~/.zshrc` for Zsh and `~/.bashrc` for Bash; the final line makes them available immediately and preserves them for new terminals.
 
 ```sh
@@ -21,9 +29,10 @@ cat >> "$rc_file" <<'EOF'
 alias ompf='omp --profile fast'
 alias ompg='omp --profile glm'
 alias ompb='omp --profile budget'
-alias omps='omp --profile spark'
 alias ompr='omp --profile grok'
 alias omph='omp --profile hybrid'
+alias ompo='omp --profile openai'
+alias ompp='omp --profile poor'
 EOF
 
 . "$rc_file"
@@ -31,22 +40,21 @@ EOF
 
 Start a profile with its shortcut, for example `ompf` for the fast profile or `omph` for the hybrid profile. See the table below for every shortcut.
 
-Each directory in this repository is an `omp --profile` profile. Its `agent/config.yml` is a normal, writable, profile-specific file; all other discovered runtime state is shared from `~/.omp/agent`.
+Each entry in `omp-profiles.txt` names an `omp --profile` profile. `omp-profile-share sync` creates any missing profile directory and its ordinary, writable `agent/config.yml`; all other discovered runtime state is shared from `~/.omp/agent`.
 
 Managed links use paths relative to `<profile>/agent` (for example, `../../../agent/agent.db`), so they remain valid on another machine when the repository is checked out at `~/.omp/profiles`.
 
 ## Profiles
 
-| Profile | Alias | Main model |
-| --- | --- | --- |
-| `fast` | `ompf` | GPT-5.6-Luna |
-| `glm` | `ompg` | GLM-5.2 |
-| `budget` | `ompb` | GLM-5.2 |
-| `spark` | `omps` | GPT-5.3-Codex-Spark |
-| `grok` | `ompr` | Grok-4.5 |
-| `hybrid` | `omph` | Codex + GLM-5.2 + Grok |
-
-`ompg` was requested for both `glm` and `grok`; a shell cannot define two aliases with the same name. It is assigned to `glm`, and the Grok alias is `ompr`.
+| Profile | Shortcut |
+| --- | --- |
+| `fast` | `ompf` |
+| `glm` | `ompg` |
+| `budget` | `ompb` |
+| `grok` | `ompr` |
+| `hybrid` | `omph` |
+| `openai` | `ompo` |
+| `poor` | `ompp` |
 
 ## Run a profile without aliases
 
@@ -54,9 +62,10 @@ Managed links use paths relative to `<profile>/agent` (for example, `../../../ag
 omp --profile fast
 omp --profile glm
 omp --profile budget
-omp --profile spark
 omp --profile grok
 omp --profile hybrid
+omp --profile openai
+omp --profile poor
 ```
 
 ## Shared state and private configuration
@@ -78,11 +87,13 @@ Profile-root links use `../../<item>` and agent links use `../../../agent/<item>
 
 ## Provision and validate
 
+`omp-profiles.txt` is the canonical list. Without profile arguments, `setup`, `sync`, and `status` process every nonblank, noncomment entry; `detach` requires explicit profile names.
+
 Stop all OMP processes before changing profile links. Then run:
 
 ```sh
-omp-profile-share sync fast glm budget spark grok hybrid
-omp-profile-share status fast glm budget spark grok hybrid
+omp-profile-share sync
+omp-profile-share status
 ```
 
 The utility protects existing state: profile-local directories merge into the default store without overwriting shared files, then their original form is moved under `~/.omp/profile-share-backups/<profile>/<timestamp>/`. `setup` and `sync` refuse to run while OMP is active unless `OMP_PROFILE_SHARE_ALLOW_RUNNING=1` is explicitly set; `detach` always requires OMP to be stopped.

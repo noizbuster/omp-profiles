@@ -6,6 +6,8 @@ IFS=$'\n\t'
 OMP_ROOT="${OMP_ROOT:-$HOME/.omp}"
 DEFAULT_AGENT="${OMP_DEFAULT_AGENT:-$OMP_ROOT/agent}"
 PROFILE_ROOT="${OMP_PROFILE_ROOT:-$OMP_ROOT/profiles}"
+SCRIPT_DIR=$(dirname -- "$(realpath -- "${BASH_SOURCE[0]}")")
+PROFILE_LIST="${OMP_PROFILE_LIST:-$SCRIPT_DIR/omp-profiles.txt}"
 BACKUP_ROOT="${OMP_PROFILE_SHARE_BACKUP_ROOT:-$OMP_ROOT/profile-share-backups}"
 DEFAULT_PRIVATE_ITEMS='config.yml:config.yaml:config.json:config.jsonc:settings.json:settings.json.bak'
 PRIVATE_ITEMS="${OMP_PROFILE_PRIVATE_ITEMS:-$DEFAULT_PRIVATE_ITEMS}"
@@ -14,14 +16,17 @@ EXTRA_ROOT_PRIVATE_ITEMS="${OMP_PROFILE_ROOT_PRIVATE_ITEMS:-}"
 
 usage() {
   cat <<'EOF'
-Usage: omp-profile-share <setup|sync|status|detach> <profile> [profile...]
+Usage: omp-profile-share <setup|sync|status|detach> [profile ...]
 
 Shares every non-private top-level item from the default OMP agent directory
 with named profiles. Profile config files remain ordinary writable files.
+Without profile arguments, setup, sync, and status use omp-profiles.txt.
+Detach always requires explicit profile names.
 
 Environment:
   OMP_ROOT, OMP_DEFAULT_AGENT, OMP_PROFILE_ROOT,
   OMP_PROFILE_SHARE_BACKUP_ROOT, OMP_PROFILE_PRIVATE_ITEMS
+  OMP_PROFILE_LIST                 profile list path (defaults beside this script)
   OMP_PROFILE_SHARE_ALLOW_RUNNING=1  bypass the active-OMP safety guard
 EOF
 }
@@ -74,6 +79,56 @@ require_stopped_omp_strict() {
 
 validate_profile_name() {
   [[ $1 =~ ^[A-Za-z0-9._-]+$ && $1 != . && $1 != .. ]] || fail "invalid profile name: $1"
+}
+load_profile_list() {
+  local profile
+  local -A seen=()
+  [[ -r $PROFILE_LIST ]] || fail "profile list is not readable: $PROFILE_LIST"
+
+  while IFS= read -r profile || [[ -n $profile ]]; do
+    profile="${profile%%#*}"
+    profile="${profile#"${profile%%[![:space:]]*}"}"
+    profile="${profile%"${profile##*[![:space:]]}"}"
+    [[ -n $profile ]] || continue
+    validate_profile_name "$profile"
+    [[ ! ${seen[$profile]+present} ]] || fail "duplicate profile in list: $profile"
+    seen[$profile]=1
+    profiles+=("$profile")
+  done <"$PROFILE_LIST"
+
+  [[ ${#profiles[@]} -gt 0 ]] || fail "profile list is empty: $PROFILE_LIST"
+}
+
+profile_alias() {
+  case $1 in
+    fast) printf 'ompf' ;;
+    glm) printf 'ompg' ;;
+    budget) printf 'ompb' ;;
+    grok) printf 'ompr' ;;
+    hybrid) printf 'omph' ;;
+    openai) printf 'ompo' ;;
+    poor) printf 'ompp' ;;
+    *) printf 'omp_%s' "$1" ;;
+  esac
+}
+
+print_setup_summary() {
+  local profile shortcut rc_file
+  printf '\nSetup complete: %d profile(s) configured.\n' "${#profiles[@]}"
+  for profile in "${profiles[@]}"; do
+    printf '  - %s\n' "$profile"
+  done
+
+  rc_file="${ZDOTDIR:-$HOME}/.zshrc"
+  case ${SHELL-} in
+    */bash|bash) rc_file="$HOME/.bashrc" ;;
+  esac
+  printf '\nAdd these aliases to %s:\n' "$rc_file"
+  for profile in "${profiles[@]}"; do
+    shortcut=$(profile_alias "$profile")
+    printf "alias %s='omp --profile %s'\n" "$shortcut" "$profile"
+  done
+  printf 'Reload the aliases with: source %q\n' "$rc_file"
 }
 
 profile_agent_dir() {
@@ -397,25 +452,40 @@ detach_profile() {
   shopt -u dotglob nullglob
 }
 
-[[ $# -ge 2 ]] || { usage >&2; exit 2; }
+[[ $# -ge 1 ]] || { usage >&2; exit 2; }
 command=$1
 shift
+profiles=("$@")
+
+case $command in
+  setup|sync|status)
+    if [[ ${#profiles[@]} -eq 0 ]]; then
+      load_profile_list
+    fi
+    ;;
+  detach)
+    [[ ${#profiles[@]} -gt 0 ]] || fail 'detach requires at least one explicit profile.'
+    ;;
+  *)
+    usage >&2
+    exit 2
+    ;;
+esac
 
 [[ -d $DEFAULT_AGENT ]] || fail "default agent directory does not exist: $DEFAULT_AGENT"
 case $command in
   setup|sync)
     require_stopped_omp
-    for profile in "$@"; do sync_profile "$profile"; done
+    for profile in "${profiles[@]}"; do sync_profile "$profile"; done
+    if [[ $command == setup ]]; then
+      print_setup_summary
+    fi
     ;;
   status)
-    for profile in "$@"; do status_profile "$profile"; done
+    for profile in "${profiles[@]}"; do status_profile "$profile"; done
     ;;
   detach)
     require_stopped_omp_strict
-    for profile in "$@"; do detach_profile "$profile"; done
-    ;;
-  *)
-    usage >&2
-    exit 2
+    for profile in "${profiles[@]}"; do detach_profile "$profile"; done
     ;;
 esac

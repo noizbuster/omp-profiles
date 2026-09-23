@@ -2,6 +2,7 @@
 fast
 glm
 budget
-spark
 grok
 hybrid
+openai
+poor
