@@ -13,20 +13,26 @@ DEFAULT_PRIVATE_ITEMS='config.yml:config.yaml:config.json:config.jsonc:settings.
 PRIVATE_ITEMS="${OMP_PROFILE_PRIVATE_ITEMS:-$DEFAULT_PRIVATE_ITEMS}"
 ROOT_PRIVATE_ITEMS='agent:profiles:profile-share-backups'
 EXTRA_ROOT_PRIVATE_ITEMS="${OMP_PROFILE_ROOT_PRIVATE_ITEMS:-}"
+# Editor/OS temp artifacts are never shared or promoted; they appear and vanish
+# while a file is edited and would otherwise leave dangling links behind.
+DEFAULT_JUNK_PATTERNS='*.swp:*.swx:*.swo:*~:.DS_Store:*.tmp:*.part:*.crdownload'
+JUNK_PATTERNS="${OMP_PROFILE_JUNK_PATTERNS:-$DEFAULT_JUNK_PATTERNS}"
 
 usage() {
   cat <<'EOF'
-Usage: omp-profile-share <setup|sync|status|detach> [profile ...]
+Usage: omp-profile-share <setup|sync|status|create|detach> [profile ...]
 
 Shares every non-private top-level item from the default OMP agent directory
 with named profiles. Profile config files remain ordinary writable files.
 Without profile arguments, setup, sync, and status use omp-profiles.txt.
+Create registers explicit profile names in that list, then syncs them.
 Detach always requires explicit profile names.
 
 Environment:
   OMP_ROOT, OMP_DEFAULT_AGENT, OMP_PROFILE_ROOT,
   OMP_PROFILE_SHARE_BACKUP_ROOT, OMP_PROFILE_PRIVATE_ITEMS
-  OMP_PROFILE_LIST                 profile list path (defaults beside this script)
+  OMP_PROFILE_JUNK_PATTERNS          colon-separated globs never shared
+  OMP_PROFILE_LIST                   profile list path (defaults beside this script)
   OMP_PROFILE_SHARE_ALLOW_RUNNING=1  bypass the active-OMP safety guard
 EOF
 }
@@ -36,8 +42,21 @@ fail() {
   exit 1
 }
 
+is_junk() {
+  local name=$1 pattern
+  local -a patterns
+  IFS=: read -r -a patterns <<<"$JUNK_PATTERNS"
+  for pattern in "${patterns[@]}"; do
+    [[ $pattern ]] || continue
+    # shellcheck disable=SC2053  # $pattern is an intentional glob
+    [[ $name == $pattern ]] && return 0
+  done
+  return 1
+}
+
 is_private() {
   local name=$1 item
+  is_junk "$name" && return 0
   IFS=: read -r -a items <<<"$PRIVATE_ITEMS"
   for item in "${items[@]}"; do
     [[ $name == "$item" ]] && return 0
@@ -48,6 +67,7 @@ is_private() {
 is_root_private() {
   local name=$1 item list
   local -a items
+  is_junk "$name" && return 0
   for list in "$ROOT_PRIVATE_ITEMS" "$EXTRA_ROOT_PRIVATE_ITEMS"; do
     IFS=: read -r -a items <<<"$list"
     for item in "${items[@]}"; do
@@ -99,6 +119,32 @@ load_profile_list() {
   [[ ${#profiles[@]} -gt 0 ]] || fail "profile list is empty: $PROFILE_LIST"
 }
 
+profile_in_list() {
+  local profile=$1 line
+  [[ -r $PROFILE_LIST ]] || return 1
+  while IFS= read -r line || [[ -n $line ]]; do
+    line="${line%%#*}"
+    line="${line#"${line%%[![:space:]]*}"}"
+    line="${line%"${line##*[![:space:]]}"}"
+    [[ $line == "$profile" ]] && return 0
+  done <"$PROFILE_LIST"
+  return 1
+}
+
+register_profile() {
+  local profile=$1
+  if profile_in_list "$profile"; then
+    printf 'PRESENT %s in %s\n' "$profile" "$PROFILE_LIST"
+    return
+  fi
+  [[ -w $PROFILE_LIST ]] || fail "profile list is not writable: $PROFILE_LIST"
+  if [[ -s $PROFILE_LIST && -n $(tail -c 1 "$PROFILE_LIST") ]]; then
+    printf '\n' >>"$PROFILE_LIST"
+  fi
+  printf '%s\n' "$profile" >>"$PROFILE_LIST"
+  printf 'REGISTERED %s -> %s\n' "$profile" "$PROFILE_LIST"
+}
+
 profile_alias() {
   case $1 in
     fast) printf 'ompf' ;;
@@ -140,7 +186,8 @@ profile_dir() {
 }
 
 relative_target() {
-  realpath --relative-to="$1" "$2"
+  # -m keeps working when the default item does not exist yet (dangling links).
+  realpath -m --relative-to="$1" "$2"
 }
 
 backup_path() {
@@ -218,6 +265,29 @@ link_root_item() {
   printf 'SHARED_ROOT %s -> %s\n' "$destination" "$target"
 }
 
+# Drop managed links whose default-store item disappeared. Later runs re-link
+# the item when it comes back, and any profile-local copy is promoted first.
+prune_dangling_links() {
+  local profile=$1 directory=$2 source_dir=$3 scope=$4 name destination source target
+  shopt -s dotglob nullglob
+  for destination in "$directory"/*; do
+    name=$(basename "$destination")
+    case $scope in
+      root) is_root_private "$name" && continue ;;
+      agent) is_private "$name" && continue ;;
+    esac
+    [[ -L $destination ]] || continue
+    [[ -e $destination ]] && continue          # resolves, so the target exists
+    source="$source_dir/$name"
+    [[ -e $source || -L $source ]] && continue # live sources are handled by the link loops
+    target=$(relative_target "$directory" "$source")
+    [[ $(readlink "$destination") == "$target" ]] || continue
+    rm -- "$destination"
+    printf 'PRUNED %s/%s (dangling -> %s)\n' "$profile" "$name" "$source"
+  done
+  shopt -u dotglob nullglob
+}
+
 promote_profile_root_only_items() {
   local profile=$1 directory=$2 stamp=$3 destination source name target
   shopt -s dotglob nullglob
@@ -232,19 +302,6 @@ promote_profile_root_only_items() {
     cp -a "$destination" "$target"
     mv "$destination" "$source"
     printf 'PROMOTED_ROOT %s -> %s (backup: %s)\n' "$destination" "$source" "$target"
-  done
-  shopt -u dotglob nullglob
-}
-
-sync_profile_root() {
-  local profile=$1 directory=$2 stamp=$3 source name
-  promote_profile_root_only_items "$profile" "$directory" "$stamp"
-
-  shopt -s dotglob nullglob
-  for source in "$OMP_ROOT"/*; do
-    name=$(basename "$source")
-    is_root_private "$name" && continue
-    link_root_item "$profile" "$directory" "$source" "$stamp"
   done
   shopt -u dotglob nullglob
 }
@@ -268,7 +325,7 @@ promote_profile_only_items() {
   shopt -u dotglob nullglob
 }
 
-sync_profile() {
+prepare_profile() {
   local profile=$1 directory agent_dir source stamp name
   validate_profile_name "$profile"
   directory=$(profile_dir "$profile")
@@ -277,7 +334,7 @@ sync_profile() {
   ensure_private_config "$profile" "$agent_dir"
   stamp=$(date +%Y%m%d-%H%M%S)
 
-  sync_profile_root "$profile" "$directory" "$stamp"
+  promote_profile_root_only_items "$profile" "$directory" "$stamp"
 
   # Sidecars are owned by SQLite beside the resolved database and must never
   # remain as profile-local files or be replaced with links.
@@ -289,7 +346,25 @@ sync_profile() {
   done
   shopt -u nullglob
   promote_profile_only_items "$profile" "$agent_dir" "$stamp"
+}
 
+share_profile() {
+  local profile=$1 directory agent_dir source stamp name
+  validate_profile_name "$profile"
+  directory=$(profile_dir "$profile")
+  agent_dir=$(profile_agent_dir "$profile")
+  stamp=$(date +%Y%m%d-%H%M%S)
+
+  prune_dangling_links "$profile" "$directory" "$OMP_ROOT" root
+  shopt -s dotglob nullglob
+  for source in "$OMP_ROOT"/*; do
+    name=$(basename "$source")
+    is_root_private "$name" && continue
+    link_root_item "$profile" "$directory" "$source" "$stamp"
+  done
+  shopt -u dotglob nullglob
+
+  prune_dangling_links "$profile" "$agent_dir" "$DEFAULT_AGENT" agent
   shopt -s dotglob nullglob
   for source in "$DEFAULT_AGENT"/*; do
     name=$(basename "$source")
@@ -329,7 +404,9 @@ status_profile_root() {
     is_root_private "$name" && continue
     source="$OMP_ROOT/$name"
     [[ -e $source || -L $source ]] && continue
-    if [[ -L $destination ]]; then
+    if [[ -L $destination && ! -e $destination ]]; then
+      printf 'ROOT_DANGLING %s/%s -> %s\n' "$profile" "$name" "$(readlink "$destination")"
+    elif [[ -L $destination ]]; then
       printf 'ROOT_LINK? %s/%s -> %s\n' "$profile" "$name" "$(readlink "$destination")"
     else
       printf 'ROOT_LOCAL %s/%s\n' "$profile" "$name"
@@ -392,7 +469,9 @@ status_profile() {
     is_sqlite_sidecar "$name" && continue
     source="$DEFAULT_AGENT/$name"
     [[ -e $source || -L $source ]] && continue
-    if [[ -L $destination ]]; then
+    if [[ -L $destination && ! -e $destination ]]; then
+      printf 'DANGLING %s/%s -> %s\n' "$profile" "$name" "$(readlink "$destination")"
+    elif [[ -L $destination ]]; then
       printf 'LINK? %s/%s -> %s\n' "$profile" "$name" "$(readlink "$destination")"
     else
       printf 'LOCAL %s/%s\n' "$profile" "$name"
@@ -466,6 +545,9 @@ case $command in
   detach)
     [[ ${#profiles[@]} -gt 0 ]] || fail 'detach requires at least one explicit profile.'
     ;;
+  create)
+    [[ ${#profiles[@]} -gt 0 ]] || fail 'create requires at least one explicit profile name.'
+    ;;
   *)
     usage >&2
     exit 2
@@ -474,10 +556,19 @@ esac
 
 [[ -d $DEFAULT_AGENT ]] || fail "default agent directory does not exist: $DEFAULT_AGENT"
 case $command in
-  setup|sync)
+  setup|sync|create)
     require_stopped_omp
-    for profile in "${profiles[@]}"; do sync_profile "$profile"; done
-    if [[ $command == setup ]]; then
+    if [[ $command == create ]]; then
+      for profile in "${profiles[@]}"; do
+        validate_profile_name "$profile"
+        register_profile "$profile"
+      done
+    fi
+    # Promote profile-local state before linking so every profile also picks up
+    # items promoted out of a sibling profile within the same run.
+    for profile in "${profiles[@]}"; do prepare_profile "$profile"; done
+    for profile in "${profiles[@]}"; do share_profile "$profile"; done
+    if [[ $command == setup || $command == create ]]; then
       print_setup_summary
     fi
     ;;

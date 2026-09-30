@@ -1,7 +1,7 @@
 # OMP-managed transient state. The omp binary creates and deletes these at
 # profile root on its own (legacy extension-cache DB, web/puppeteer caches,
 # marketplace state); they regenerate at runtime and must not be committed.
-/*/cache/
-/*/webcache/
-/*/puppeteer/
+/*/cache
+/*/webcache
+/*/puppeteer
 /*/marketplaces.json

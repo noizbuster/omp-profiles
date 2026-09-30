@@ -74,20 +74,38 @@ omp --profile poor
 
 Current `agent/` links include:
 
-- `agent.db`, `history.db`, and `models.db`
-- `agents`, `sessions`, and `terminal-sessions`
-- `last-changelog-version`
+- `agent.db`, `history.db`, `models.db`, and `models.yml`
+- `agents`, `sessions`, `terminal-sessions`, and `memories`
+- `blobs`, `cache`, `extensions`, `predict`, `resident-cache`, and `tools`
+- `custom-session-files`, `skill-descriptions.db`, and the crash logs
 
 Current profile-root links include:
 
-- `auth-broker.token`, `gpu_cache.json`, and `install-id`
-- `logs`, `plugins`, and `run`
+- `auth-broker.token`, `gpu_cache.json`, `install-id`, and `marketplaces.json`
+- `logs`, `plugins`, `run`, `cache`, `puppeteer`, and `webcache`
+- `models.yml`, `stats.db`, `stats.db-shm`, `stats.db-wal`, and `autoqa.db`
+- `browser-profiles`, `local`, `natives`, `ssh-control`, and `wt`
 
-Profile-root links use `../../<item>` and agent links use `../../../agent/<item>`, keeping a clone portable at `~/.omp/profiles`. The profile's `agent/` directory, `profiles/`, and `profile-share-backups/` remain structural local paths. `config.yml` is deliberately excluded: it is an ordinary file in each profile directory. SQLite `-wal`, `-shm`, and `-journal` sidecar files are never linked. If a default-agent item such as `blobs`, `memories`, `skills`, or `extensions` exists, the utility will link it on the next sync.
+Profile-root links use `../../<item>` and agent links use `../../../agent/<item>`, keeping a clone portable at `~/.omp/profiles`. The profile's `agent/` directory, `profiles/`, and `profile-share-backups/` remain structural local paths. `config.yml` is deliberately excluded: it is an ordinary file in each profile directory.
+
+Rules the utility applies to everything else:
+
+- Editor and OS artifacts matching `OMP_PROFILE_JUNK_PATTERNS` (`*.swp`, `*.swx`, `*.swo`, `*~`, `.DS_Store`, `*.tmp`, `*.part`, `*.crdownload`) are never linked or promoted.
+- Items that exist only in a profile are promoted into the default store before linking, so one `sync` converges every profile.
+- A managed link whose default-store item disappeared is reported as `DANGLING` and pruned; it is linked again once the item exists.
+- Inside `agent/`, SQLite `-wal`, `-shm`, and `-journal` sidecars are never linked: SQLite writes them beside the resolved database file. At the profile root, the sidecars of a shared database such as `stats.db` are linked together with the database.
 
 ## Provision and validate
 
-`omp-profiles.txt` is the canonical list. Without profile arguments, `setup`, `sync`, and `status` process every nonblank, noncomment entry; `detach` requires explicit profile names.
+`omp-profiles.txt` is the canonical list. Without profile arguments, `setup`, `sync`, and `status` process every nonblank, noncomment entry; `create` and `detach` require explicit profile names.
+
+Add a profile and link it in one step:
+
+```sh
+omp-profile-share create work
+```
+
+`create` appends each name to `omp-profiles.txt` when it is missing, creates the profile directory with its private `config.yml`, and links every shareable item.
 
 Stop all OMP processes before changing profile links. Then run:
 
@@ -96,7 +114,7 @@ omp-profile-share sync
 omp-profile-share status
 ```
 
-The utility protects existing state: profile-local directories merge into the default store without overwriting shared files, then their original form is moved under `~/.omp/profile-share-backups/<profile>/<timestamp>/`. `setup` and `sync` refuse to run while OMP is active unless `OMP_PROFILE_SHARE_ALLOW_RUNNING=1` is explicitly set; `detach` always requires OMP to be stopped.
+The utility protects existing state: profile-local directories merge into the default store without overwriting shared files, then their original form is moved under `~/.omp/profile-share-backups/<profile>/<timestamp>/`. Promotion runs for every named profile before linking, so an item promoted out of one profile is shared with all of them in the same run. `setup`, `sync`, and `create` refuse to run while OMP is active unless `OMP_PROFILE_SHARE_ALLOW_RUNNING=1` is explicitly set; `detach` always requires OMP to be stopped.
 
 For a one-profile rollback, first stop OMP, then run:
 
